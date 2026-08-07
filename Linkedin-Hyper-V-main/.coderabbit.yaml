@@ -1,0 +1,49 @@
+# CodeRabbit AI Code Review Configuration
+# https://docs.coderabbit.ai/getting-started/configure-coderabbit
+
+version: "2"
+
+language: "en-US"
+
+tone_instructions: |
+  Perform rigorous Google Staff Engineer level code reviews focusing on Security (OWASP Top 10), Performance, Reliability, and Architecture consistency. Highlighting non-root container safety, OAuth 2.0 PKCE compliance, and memory leak prevention is essential.
+
+reviews:
+  profile: "assertive"
+  request_tools:
+    - name: "eslint"
+    - name: "typescript"
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+      - "master"
+
+chat:
+  auto_reply: true
+
+tools:
+  github-checks:
+    enabled: true
+  ast-grep:
+    enabled: true
+  shellcheck:
+    enabled: true
+
+path_instructions:
+  - path: "lib/linkedin/**/*.ts"
+    instructions: |
+      Verify strict compliance with OAuth 2.0 PKCE (RFC 7636) S256 code challenge generation, AES-256-GCM token encryption, and HTTP 429 rate limit exponential backoff parsing. Ensure no raw access tokens or secrets are logged.
+
+  - path: "worker/src/**/*.js"
+    instructions: |
+      Check for clean modular Express routing, unhandled promise rejections, memory leaks in Redis or HTTP client instances, and ensure background workers check database connectivity gracefully.
+
+  - path: "nomad/**/*.hcl"
+    instructions: |
+      Ensure no plaintext secrets or credentials are hardcoded. Verify dynamic HashiCorp Vault secret templates are used and that instance counts support multi-node High Availability.
+
+  - path: "Dockerfile"
+    instructions: |
+      Enforce Principle of Least Privilege (POLP). Confirm Docker containers drop root privileges and execute under non-root system users (e.g. USER nextjs or USER pwuser).
