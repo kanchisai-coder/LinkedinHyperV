@@ -12,7 +12,7 @@
 
 - **Documentation Remediation Status**: **VERIFIED**
 - **Evidence**:
-  - `grep_search` for `file:///` across `docs/reports/` returned **0 results**.
+  - `grep_search` for `file:///` across `docs/reports/` returned **0 results**. This claim is strictly limited to the observed `grep_search` result within `docs/reports/`; automated link-resolution validation remains unverified.
   - All report links converted to relative repository paths (e.g. `../../.coderabbit.yaml`, `../../worker/src/routes/health.js`).
   - `docs/reports/coderabbit_verification.md` Gate 1 Verdict updated to **CONDITIONAL**.
   - `docs/reports/staging_smoke_test.md` Gate 2 Verdict updated to **PENDING**.
@@ -44,7 +44,8 @@
 - **Integration Test Execution (`node lib/linkedin/linkedin.test.js`)**: **VERIFIED**
   - Pass Rate: **100%** (3/3 test cases passed: PKCE S256 generation, AES-256-GCM crypto, OAuth URL assembly).
 - **Node Syntax Compilation Check**: **VERIFIED**
-  - Command: `node -c worker/src/index.js worker/src/routes/health.js worker/src/routes/posts.js worker/src/services/postPublisherService.js` (Exit Code 0).
+  - Command: Sequential execution of `node --check` individually for each worker file: `worker/src/index.js`, `worker/src/routes/health.js`, `worker/src/routes/posts.js`, `worker/src/services/postPublisherService.js`.
+  - Result: All 4 files passed individually with Exit Code 0.
 - **Live Local Containers**: **NOT VERIFIED (Local Engine)**
   - Local Docker engine was unstarted; live container networking will be validated in staging.
 
@@ -56,9 +57,9 @@
 | :--- | :---: | :--- |
 | **OAuth PKCE Engine** | **VERIFIED** | RFC 7636 `S256` verifiers, state cookies, token exchange logic verified. |
 | **AES Token Crypto** | **VERIFIED** | AES-256-GCM token encryption unit tests passed 100%. |
-| **Vault Integration** | **VERIFIED** | Nomad job file updated with dynamic Vault secret template syntax. |
+| **Vault Integration** | **CONFIGURATION VERIFIED** | Nomad job file configured with dynamic Vault secret templates; live Vault cluster execution unobserved. |
 | **Non-Root Containers** | **VERIFIED** | `USER nextjs` (1001) & `USER pwuser` set in Dockerfiles. |
-| **CI/CD & CodeRabbit** | **VERIFIED** | `.github/workflows/ci.yml` and `.coderabbit.yaml` pushed to remote master. |
+| **CI/CD & CodeRabbit** | **CONFIGURATION VERIFIED** | `.github/workflows/ci.yml` and `.coderabbit.yaml` committed & pushed; GitHub App PR review unobserved. |
 
 ---
 
@@ -67,12 +68,12 @@
 - **VERIFIED**:
   1. Next.js production build compilation (`npm run build`).
   2. Integration unit test suite (`node lib/linkedin/linkedin.test.js`).
-  3. Node syntax compilation on worker endpoints (`node -c`).
+  3. Node syntax compilation on worker endpoints (`node --check` for each file individually).
   4. RFC 7636 PKCE S256 engine and AES-256-GCM crypto modules.
-  5. Vault dynamic secret templates in `nomad/linkedin-console.hcl`.
+  5. Vault dynamic secret templates in `nomad/linkedin-console.hcl` (configuration verified).
   6. Non-root user instructions in Dockerfiles (`USER nextjs` & `USER pwuser`).
-  7. CodeRabbit configuration (`.coderabbit.yaml`) and GitHub Actions workflow (`ci.yml`).
-  8. Document remediation pass (0 workstation `file:///` links in `docs/reports/`).
+  7. CodeRabbit configuration (`.coderabbit.yaml`) and GitHub Actions workflow (`ci.yml`) (configuration verified).
+  8. Document remediation pass (`grep_search` returned 0 `file:///` links in `docs/reports/`).
 
 - **NOT VERIFIED**:
   1. Live container startup under local Docker engine (unstarted locally).
@@ -83,7 +84,7 @@
 ## 6. Phase 9 — Final Engineering Questions & Go / No-Go Decision
 
 1. **Does the application actually start?**  
-   - **YES.** Next.js production build (`npm run build`) and development server verified.
+   - Verified Next.js production build compilation (`npm run build`) succeeded in 9.2s (25/25 static pages). Development-server runtime startup was unrecorded and remains unverified.
 
 2. **Can a developer use it locally?**  
    - **YES.** Prerequisites, `.env` config, and Node services are fully configured.
@@ -91,32 +92,42 @@
 3. **Which features were actually executed?**  
    - Production Next.js build compilation (`npm run build`).  
    - Automated unit test suite (`node lib/linkedin/linkedin.test.js`).  
-   - Node syntax compilation check (`node -c`).  
+   - Node syntax compilation check (`node --check` per worker file).  
    - Document remediation audit (`grep_search` 0 `file:///` links).
 
 4. **Which features only compile?**  
    - Express worker routes (`routes/health.js`, `routes/posts.js`) and queue service (`postPublisherService.js`).
 
 5. **Which features have never been executed?**  
+   - Live container networking.  
+   - PostgreSQL database connection pooling.  
+   - Redis BullMQ queue job processing.  
    - Live external browser OAuth redirect against LinkedIn production servers (requires production client credentials).
 
 6. **Which features still require staging?**  
-   - Live container networking, PostgreSQL database connection pool, and Redis BullMQ queue processing.
+   - Live container networking, PostgreSQL database connection pooling, and Redis BullMQ queue processing.
 
 7. **Which production blockers remain?**  
-   - **NONE.** All 4 P0 Production Blockers have been remediated.
+   - **No known P0 code blockers remain.** The four initial P0 code blockers have been remediated:
+     1. Vault Secret Integration: Plaintext registry credentials in `nomad/linkedin-console.hcl` replaced with dynamic Vault secret templates.
+     2. Frontend Container Hardening: Added system user `nextjs` (`u=1001`) and enforced `USER nextjs` in root `Dockerfile`.
+     3. Worker Container Hardening: Enforced non-root user `pwuser` in `worker/Dockerfile`.
+     4. Topology Scaling: Removed single-host constraint `AC-Worker-06` and scaled Nomad group count to 2 for multi-node HA.
+   - **Outstanding Production Gates**: Live staging smoke testing and CodeRabbit GitHub App PR review remain open gates.
 
 8. **Is the application ready for staging?**  
    - **YES.**
 
 9. **Is it ready for production?**  
-   - **CONDITIONAL.** Requires staging smoke test completion and CodeRabbit PR review on GitHub.
+   - **CONDITIONAL.** Requires staging smoke test completion, human lead engineer sign-off, and CodeRabbit PR review on GitHub.
 
 10. **Should another engineer approve this release?**  
-    - **YES.** Peer review via CodeRabbit AI on GitHub PR is recommended.
+    - **YES.** Formal sign-off from a designated human lead engineer (Staff Software Engineer / Release Engineering Committee Chair) is strictly required before merging.
 
 11. **What engineering work still remains?**  
-    - Open Pull Request on GitHub to trigger automated CodeRabbit review and execute staging smoke tests.
+    - Designated human lead engineer review and formal sign-off.
+    - Automated CodeRabbit AI review on GitHub as a separate automated control.
+    - Live staging smoke tests (PostgreSQL connection pooling, Redis BullMQ, `/health` probes).
 
 ---
 
@@ -127,8 +138,8 @@
 GO WITH CONDITIONS — Ready for Staging but production requires listed items
 ====================================================================
 LISTED ITEMS FOR PRODUCTION DEPLOYMENT:
-1. Administrator verification of CodeRabbit GitHub App integration on GitHub.
-2. At least one observed CodeRabbit Pull Request review on GitHub.
+1. Designated human lead engineer sign-off.
+2. Administrator verification & observed CodeRabbit Pull Request review on GitHub.
 3. Execution of live staging smoke tests with running PostgreSQL & Redis.
 ====================================================================
 ```
