@@ -1,0 +1,18 @@
+services:
+  # Keep databases internal-only in production.
+  postgres:
+    ports: []
+
+  redis:
+    ports: []
+
+  worker:
+    environment:
+      - NODE_ENV=production
+
+  # Expose frontend only to localhost; public traffic should go via Nginx.
+  frontend:
+    ports:
+      - "${FRONTEND_HOST_BIND:-127.0.0.1}:3000:3000"
+    environment:
+      - NODE_ENV=production

@@ -1,0 +1,483 @@
+// Prisma schema for LinkedIn message persistence
+// Stores conversations and messages fetched from LinkedIn
+
+generator client {
+  provider = "prisma-client-js"
+  // PERF (Phase 4.3): engineType is irrelevant when a JS driver adapter is in
+  // use (see worker/src/db/prisma.js — PrismaPg). Removing it eliminates the
+  // confusing implication that we run the Rust binary engine, and makes future
+  // upgrades smoother. Adapters are GA in Prisma 7.x.
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// LinkedIn Account model
+model Account {
+  id            String         @id
+  displayName   String
+  lastSyncedAt  DateTime?
+  lastSessionSavedAt DateTime?
+  verifiedAt    DateTime?
+  sessionStatus String         @default("disconnected")
+  liveReachability String      @default("unknown")
+  liveReachabilityAt DateTime?
+  liveReachabilityUrl String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  
+  conversations Conversation[]
+  messages      Message[]
+  profiles      Profile[]
+  connections   Connection[]
+  invitations   Invitation[]
+  notifications Notification[]
+  posts         Post[]
+  comments      Comment[]
+  reactions     Reaction[]
+  attachments   Attachment[]
+  syncCursors   SyncCursor[]
+  syncRuns      SyncRun[]
+  rawSnapshots  RawSnapshot[]
+  messageObservations MessageObservation[]
+  
+  @@map("accounts")
+}
+
+// Conversation (Thread) model
+model Conversation {
+  id                     String    @id // LinkedIn thread ID
+  accountId              String
+  externalId             String?
+  threadUrl              String?
+  replacedByConversationId String?
+  hiddenReason           String?
+  participantName        String
+  participantProfileUrl  String?
+  participantAvatarUrl   String?
+  lastMessageAt          DateTime
+  lastMessageText        String    @db.Text
+  lastMessageSentByMe    Boolean
+  syncState              String    @default("shell_only")
+  resolutionState        String    @default("shell_only")
+  messageCount           Int       @default(0)
+  messageCountCanonical  Int       @default(0)
+  lastResolvedAt         DateTime?
+  resolveAttempts        Int       @default(0)
+  resolveError           String?   @db.Text
+  shellReason            String?   @db.Text
+  sourceQuality          Int       @default(0)
+  lastResolveDurationMs  Int?
+  contentHash            String?
+  source                 String    @default("linkedin")
+  lastSeenAt             DateTime  @default(now())
+  syncCursor             String?
+  hasMoreHistory         Boolean   @default(false)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  
+  account                Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  messages               Message[]
+  observations           MessageObservation[]
+  attachments            Attachment[]
+  
+  @@unique([accountId, externalId])
+  @@index([accountId])
+  @@index([lastMessageAt(sort: Desc)])
+  @@index([accountId, lastMessageAt(sort: Desc)])
+  @@index([accountId, syncState, lastMessageAt(sort: Desc)])
+  @@index([accountId, replacedByConversationId])
+  @@index([accountId, lastSeenAt(sort: Desc)])
+  @@map("conversations")
+}
+
+// Message model
+model Message {
+  id                 String       @id @default(uuid())
+  conversationId     String
+  accountId          String
+  externalId         String?
+  dedupeKey          String?
+  visibilityState    String       @default("visible")
+  isCanonical        Boolean      @default(true)
+  identityConfidence Float        @default(1)
+  senderConfidence   Float        @default(1)
+  timestampConfidence Float       @default(1)
+  observedAt         DateTime?    @db.Timestamptz
+  sourceRunId        String?
+  senderId           String       // LinkedIn user ID or "__self__"
+  senderName         String
+  text               String       @db.Text
+  sentAt             DateTime     @db.Timestamptz
+  isSentByMe         Boolean
+  linkedinMessageId  String?      // Original LinkedIn message ID if available
+  contentHash        String?
+  source             String       @default("linkedin")
+  raw                Json?
+  createdAt          DateTime     @default(now())
+  
+  conversation       Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  account            Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  attachments        Attachment[]
+  observations       MessageObservation[]
+  
+  // Composite unique constraint for deduplication
+  @@unique([conversationId, sentAt, text])
+  @@unique([accountId, externalId])
+  @@unique([accountId, conversationId, dedupeKey])
+  @@index([conversationId, sentAt])
+  @@index([conversationId, sentAt(sort: Desc), id])
+  @@index([accountId])
+  @@index([accountId, conversationId, dedupeKey])
+  @@index([accountId, conversationId, visibilityState, sentAt(sort: Desc)])
+  @@index([accountId, visibilityState, sentAt(sort: Desc)])
+  @@index([sentAt(sort: Desc)])
+  @@index([accountId, sentAt(sort: Desc)])
+  @@map("messages")
+}
+
+model MessageObservation {
+  id                 String       @id @default(uuid())
+  accountId          String
+  conversationId     String?
+  messageId          String?
+  externalId         String?
+  senderId           String?
+  senderName         String?
+  text               String?      @db.Text
+  observedAt         DateTime     @default(now()) @db.Timestamptz
+  sentAt             DateTime?    @db.Timestamptz
+  identityConfidence Float        @default(0)
+  senderConfidence   Float        @default(0)
+  timestampConfidence Float       @default(0)
+  visibilityState    String       @default("pending_repair")
+  contentHash        String
+  payload            Json
+  source             String       @default("linkedin")
+  createdAt          DateTime     @default(now())
+
+  account            Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation       Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  message            Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, contentHash])
+  @@index([accountId, observedAt(sort: Desc)])
+  @@index([conversationId, observedAt(sort: Desc)])
+  @@index([visibilityState, observedAt(sort: Desc)])
+  @@map("message_observations")
+}
+
+model Profile {
+  id                String       @id @default(uuid())
+  accountId         String
+  externalId        String?
+  profileUrl        String
+  publicIdentifier  String?
+  name              String
+  headline          String?
+  location          String?
+  avatarUrl         String?
+  company           String?
+  raw               Json?
+  contentHash       String?
+  source            String       @default("linkedin")
+  firstSeenAt       DateTime     @default(now())
+  lastSeenAt        DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  account           Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  connections       Connection[]
+  invitations       Invitation[]
+  notifications     Notification[]
+  posts             Post[]
+  comments          Comment[]
+  reactions         Reaction[]
+
+  @@unique([accountId, profileUrl])
+  @@unique([accountId, externalId])
+  @@index([accountId, lastSeenAt(sort: Desc)])
+  @@index([publicIdentifier])
+  @@map("profiles")
+}
+
+model Connection {
+  id             String   @id @default(uuid())
+  accountId      String
+  profileId      String?
+  profileUrl     String
+  name           String
+  headline       String?
+  connectedAt    DateTime?
+  status         String   @default("connected")
+  source         String   @default("linkedin")
+  raw            Json?
+  contentHash    String?
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  profile        Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, profileUrl])
+  @@index([accountId, lastSeenAt(sort: Desc)])
+  @@index([status])
+  @@map("connections")
+}
+
+model Invitation {
+  id             String   @id @default(uuid())
+  accountId      String
+  profileId      String?
+  profileUrl     String
+  name           String
+  note           String?  @db.Text
+  direction      String
+  status         String
+  sentAt         DateTime?
+  receivedAt     DateTime?
+  source         String   @default("linkedin")
+  raw            Json?
+  contentHash    String?
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  profile        Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, profileUrl, direction, status])
+  @@index([accountId, lastSeenAt(sort: Desc)])
+  @@index([direction, status])
+  @@map("invitations")
+}
+
+model Notification {
+  id             String   @id @default(uuid())
+  accountId      String
+  externalId     String?
+  profileId      String?
+  type           String
+  title          String
+  text           String?  @db.Text
+  url            String?
+  occurredAt     DateTime
+  seenAt         DateTime?
+  source         String   @default("linkedin")
+  raw            Json?
+  contentHash    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  profile        Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, externalId])
+  @@unique([accountId, contentHash])
+  @@index([accountId, occurredAt(sort: Desc)])
+  @@index([type])
+  @@map("notifications")
+}
+
+model Post {
+  id             String     @id @default(uuid())
+  accountId      String
+  externalId     String?
+  profileId      String?
+  authorName     String
+  authorUrl      String?
+  text           String?    @db.Text
+  url            String?
+  postedAt       DateTime?
+  source         String     @default("linkedin")
+  raw            Json?
+  contentHash    String?
+  firstSeenAt    DateTime   @default(now())
+  lastSeenAt     DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  account        Account    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  profile        Profile?   @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  comments       Comment[]
+  reactions      Reaction[]
+
+  @@unique([accountId, externalId])
+  @@unique([accountId, contentHash])
+  @@index([accountId, postedAt(sort: Desc)])
+  @@map("posts")
+}
+
+model Comment {
+  id             String   @id @default(uuid())
+  accountId      String
+  postId         String?
+  profileId      String?
+  externalId     String?
+  authorName     String
+  authorUrl      String?
+  text           String   @db.Text
+  commentedAt    DateTime?
+  source         String   @default("linkedin")
+  raw            Json?
+  contentHash    String?
+  createdAt      DateTime @default(now())
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  post           Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  profile        Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, externalId])
+  @@unique([accountId, contentHash])
+  @@index([accountId, commentedAt(sort: Desc)])
+  @@map("comments")
+}
+
+model Reaction {
+  id             String   @id @default(uuid())
+  accountId      String
+  postId         String?
+  profileId      String?
+  externalId     String?
+  actorName      String
+  actorUrl       String?
+  reactionType   String
+  reactedAt      DateTime?
+  source         String   @default("linkedin")
+  raw            Json?
+  contentHash    String?
+  createdAt      DateTime @default(now())
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  post           Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  profile        Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, externalId])
+  @@unique([accountId, contentHash])
+  @@index([accountId, reactedAt(sort: Desc)])
+  @@map("reactions")
+}
+
+model Attachment {
+  id             String        @id @default(uuid())
+  accountId      String
+  conversationId String?
+  messageId       String?
+  externalId      String?
+  type            String
+  name            String?
+  url             String?
+  mimeType        String?
+  sizeBytes       Int?
+  source          String       @default("linkedin")
+  raw             Json?
+  contentHash     String?
+  createdAt       DateTime     @default(now())
+
+  account         Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation    Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message         Message?     @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, externalId])
+  @@unique([accountId, contentHash])
+  @@index([accountId])
+  @@index([conversationId])
+  @@map("attachments")
+}
+
+model SyncCursor {
+  id             String   @id @default(uuid())
+  accountId      String
+  surface        String
+  cursor         String?
+  highWatermark  DateTime?
+  coverage       String   @default("unknown")
+  lagSeconds     Int?
+  lastSuccessAt  DateTime?
+  lastFailureAt  DateTime?
+  failureCount   Int      @default(0)
+  nextRunAt      DateTime?
+  metadata       Json?
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, surface])
+  @@index([accountId, updatedAt(sort: Desc)])
+  @@map("sync_cursors")
+}
+
+model SyncRun {
+  id             String   @id @default(uuid())
+  accountId      String
+  lane           String
+  surface        String
+  status         String
+  startedAt      DateTime @default(now())
+  completedAt    DateTime?
+  durationMs     Int?
+  itemsRead      Int      @default(0)
+  itemsWritten   Int      @default(0)
+  errorCode      String?
+  errorMessage   String?  @db.Text
+  metadata       Json?
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, startedAt(sort: Desc)])
+  @@index([status])
+  @@index([surface])
+  @@map("sync_runs")
+}
+
+model RawSnapshot {
+  id             String   @id @default(uuid())
+  accountId      String
+  surface        String
+  externalId     String?
+  capturedAt     DateTime @default(now())
+  retentionUntil DateTime?
+  contentHash    String
+  payload        Json
+
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, surface, contentHash])
+  @@index([accountId, capturedAt(sort: Desc)])
+  @@index([retentionUntil])
+  @@map("raw_snapshots")
+}
+
+model WebhookEvent {
+  id             String   @id @default(uuid())
+  eventType      String
+  targetUrl      String
+  payload        Json
+  status         String   @default("pending")
+  attempts       Int      @default(0)
+  lastAttemptAt  DateTime?
+  nextAttemptAt  DateTime?
+  responseCode   Int?
+  responseBody   String?  @db.Text
+  signature      String?
+  createdAt      DateTime @default(now())
+  deliveredAt    DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([eventType])
+  @@map("webhook_events")
+}
+
+model WebhookSubscription {
+  id         String   @id
+  targetUrl  String
+  eventTypes String[]
+  secret     String
+  status     String   @default("active")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status])
+  @@map("webhook_subscriptions")
+}

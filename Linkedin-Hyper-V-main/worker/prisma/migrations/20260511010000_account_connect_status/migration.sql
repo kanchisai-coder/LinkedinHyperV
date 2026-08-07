@@ -1,0 +1,3 @@
+ALTER TABLE "accounts" ADD COLUMN IF NOT EXISTS "lastSessionSavedAt" TIMESTAMP(3);
+ALTER TABLE "accounts" ADD COLUMN IF NOT EXISTS "verifiedAt" TIMESTAMP(3);
+ALTER TABLE "accounts" ADD COLUMN IF NOT EXISTS "sessionStatus" TEXT NOT NULL DEFAULT 'disconnected';

@@ -1,0 +1,189 @@
+services:
+  # PostgreSQL database for persistent message storage.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: linkedinuser
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: linkedin_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linkedinuser -d linkedin_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    # PERF (Phase 4.1): raise to 512MB and switch to volatile-lru. Cache entries
+    # (set via SET ... EX) have TTLs and are evictable; BullMQ job state has no
+    # TTL and is therefore PROTECTED from eviction. allkeys-lru would silently
+    # drop queue jobs, which we never want.
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --save 60 1
+      --maxmemory 512mb
+      --maxmemory-policy volatile-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: ./worker
+    init: true
+    shm_size: "1gb"
+    ports:
+      - "${WORKER_HOST_BIND:-127.0.0.1}:3001:3001"
+      - "${NOVNC_HOST_BIND:-127.0.0.1}:6080:6080"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - SESSION_ENCRYPTION_KEY=${SESSION_ENCRYPTION_KEY}
+      - SESSION_TTL_DAYS=${SESSION_TTL_DAYS:-30}
+      - ACCOUNT_IDS=${ACCOUNT_IDS:-}
+      - API_SECRET=${API_SECRET}
+      # ANTI-BAN: rebrowser patches CDP leak vectors LinkedIn fingerprints.
+      # Default ON in prod; flip to 0 only if a specific incompatibility surfaces.
+      - USE_REBROWSER_PLAYWRIGHT=${USE_REBROWSER_PLAYWRIGHT:-1}
+      - BROWSER_USE_SYSTEM_CHROME=${BROWSER_USE_SYSTEM_CHROME:-1}
+      - BROWSER_HEADLESS=${BROWSER_HEADLESS:-0}
+      # PERF: TTL bumped to 5min (Phase 2.1) — see worker/src/browser.js.
+      - BROWSER_CONTEXT_TTL_MS=${BROWSER_CONTEXT_TTL_MS:-300000}
+      - BROWSER_PROBE_INTERVAL_MS=${BROWSER_PROBE_INTERVAL_MS:-30000}
+      - BROWSER_MAX_ACTIVE_CONTEXTS=${BROWSER_MAX_ACTIVE_CONTEXTS:-1}
+      - BROWSER_MAX_PAGES_PER_ACCOUNT=${BROWSER_MAX_PAGES_PER_ACCOUNT:-1}
+      - WORKER_JOB_TIMEOUT_MS=${WORKER_JOB_TIMEOUT_MS:-90000}
+      - PRISMA_SLOW_QUERY_MS=${PRISMA_SLOW_QUERY_MS:-250}
+      # PERF: smaller Xvfb defaults (Phase 2.3) — see worker/entrypoint.sh.
+      - XVFB_WIDTH=${XVFB_WIDTH:-1366}
+      - XVFB_HEIGHT=${XVFB_HEIGHT:-768}
+      - XVFB_DEPTH=${XVFB_DEPTH:-16}
+      # ── Voyager/realtime/webhooks (LINKEDIN_INGESTION_MASTERPLAN) — all OFF by default ──
+      - USE_VOYAGER_READS=${USE_VOYAGER_READS:-0}      # route inbox/thread reads via Voyager API
+      - USE_REALTIME=${USE_REALTIME:-0}                # open realtime stream per account
+      - WEBHOOK_ENDPOINTS=${WEBHOOK_ENDPOINTS:-}       # JSON array of {url,secret,events,accounts}
+      - EVENT_STREAM_MAXLEN=${EVENT_STREAM_MAXLEN:-100000}
+      - WEBHOOK_MAX_ATTEMPTS=${WEBHOOK_MAX_ATTEMPTS:-8}
+      # ── Auth capture + auto-relogin (AUTH_AUTOLOGIN_MASTERPLAN) — OFF default ──
+      - ENABLE_CRED_CAPTURE=${ENABLE_CRED_CAPTURE:-0}     # capture creds during noVNC connect
+      - ENABLE_AUTO_RELOGIN=${ENABLE_AUTO_RELOGIN:-0}     # programmatic re-login on session expiry
+      - CRED_STORE_TTL_S=${CRED_STORE_TTL_S:-7776000}     # 90 days
+      # ── Rotating proxy pool (PROXY_POOL_*). Set PROXY_FOR_<id>=pool or
+      #    PROXY_POOL_MODE=1 to route accounts through the healthy pool.
+      #    ⚠️ untrusted/free proxies can intercept session cookies — prefer paid residential. ──
+      - PROXY_POOL=${PROXY_POOL:-}
+      - PROXY_POOL_URL=${PROXY_POOL_URL:-}
+      - PROXY_POOL_MODE=${PROXY_POOL_MODE:-0}
+      - PROXY_POOL_ALLOW_HOSTING=${PROXY_POOL_ALLOW_HOSTING:-0}
+      - PROXY_POOL_REFRESH_MS=${PROXY_POOL_REFRESH_MS:-600000}
+      # ── Slow full-sync (SLOW_FULL_SYNC_MASTERPLAN) — OFF by default ──
+      - ENABLE_BACKFILL=${ENABLE_BACKFILL:-0}
+      - HARVEST_GLOBAL_OPS_PER_HOUR=${HARVEST_GLOBAL_OPS_PER_HOUR:-20}
+      - HARVEST_ACCOUNT_OPS_PER_HOUR=${HARVEST_ACCOUNT_OPS_PER_HOUR:-6}
+      - HARVEST_PAGE_SIZE=${HARVEST_PAGE_SIZE:-30}
+      - HARVEST_TICK_MS=${HARVEST_TICK_MS:-60000}
+      # ANTI-BAN: cadence cuts. 5min sync from a datacenter IP is the loudest
+      # signal possible. 30min delta + 4h backfill is closer to human-pace.
+      - SYNC_INTERVAL_MINUTES=${SYNC_INTERVAL_MINUTES:-30}
+      - BACKFILL_INTERVAL_MINUTES=${BACKFILL_INTERVAL_MINUTES:-240}
+      - CONNECTIONS_DELTA_INTERVAL_MINUTES=${CONNECTIONS_DELTA_INTERVAL_MINUTES:-60}
+      - INVITATIONS_INTERVAL_MINUTES=${INVITATIONS_INTERVAL_MINUTES:-120}
+      - UNIFIED_DELTA_MAX_THREADS=${UNIFIED_DELTA_MAX_THREADS:-1}
+      - UNIFIED_BACKFILL_MAX_THREADS=${UNIFIED_BACKFILL_MAX_THREADS:-1}
+      - UNIFIED_DELTA_THREAD_LIMIT=${UNIFIED_DELTA_THREAD_LIMIT:-4}
+      - UNIFIED_BACKFILL_THREAD_LIMIT=${UNIFIED_BACKFILL_THREAD_LIMIT:-8}
+      # ANTI-BAN: business-hours gating, circuit breaker, hourly rate caps.
+      # See worker/src/antiBan.js and deployment/ANTI_BAN_*.md.
+      - ANTIBAN_BUSINESS_HOURS_ENABLED=${ANTIBAN_BUSINESS_HOURS_ENABLED:-true}
+      - ANTIBAN_BUSINESS_START=${ANTIBAN_BUSINESS_START:-9}
+      - ANTIBAN_BUSINESS_END=${ANTIBAN_BUSINESS_END:-18}
+      - ANTIBAN_ALLOW_WEEKENDS=${ANTIBAN_ALLOW_WEEKENDS:-false}
+      - ANTIBAN_DEFAULT_TZ=${ANTIBAN_DEFAULT_TZ:-America/New_York}
+      - ANTIBAN_SURFACE_FAIL_THRESHOLD=${ANTIBAN_SURFACE_FAIL_THRESHOLD:-3}
+      - ANTIBAN_SURFACE_COOLDOWN_S=${ANTIBAN_SURFACE_COOLDOWN_S:-21600}
+      - ANTIBAN_ACCOUNT_COOLDOWN_S=${ANTIBAN_ACCOUNT_COOLDOWN_S:-43200}
+      - ANTIBAN_ACCOUNT_COOLDOWN_THRESHOLD=${ANTIBAN_ACCOUNT_COOLDOWN_THRESHOLD:-3}
+      - ANTIBAN_REQUIRE_PROXY=${ANTIBAN_REQUIRE_PROXY:-0}
+      - SYNC_BACKOFF_BLOCKED_MIN=${SYNC_BACKOFF_BLOCKED_MIN:-2880}
+      - SYNC_BACKOFF_AUTOMATION_WARNING_MIN=${SYNC_BACKOFF_AUTOMATION_WARNING_MIN:-10080}
+      - SYNC_BACKOFF_CHECKPOINT_MIN=${SYNC_BACKOFF_CHECKPOINT_MIN:-1440}
+      - SYNC_BACKOFF_EXPIRED_MIN=${SYNC_BACKOFF_EXPIRED_MIN:-720}
+      # ANTI-BAN: hourly per-action caps complement the existing daily caps.
+      - RATE_LIMIT_HOURLY_MESSAGES_SENT=${RATE_LIMIT_HOURLY_MESSAGES_SENT:-4}
+      - RATE_LIMIT_HOURLY_CONNECT_REQUESTS=${RATE_LIMIT_HOURLY_CONNECT_REQUESTS:-3}
+      - RATE_LIMIT_HOURLY_PROFILE_VIEWS=${RATE_LIMIT_HOURLY_PROFILE_VIEWS:-10}
+      - RATE_LIMIT_HOURLY_SEARCH_QUERIES=${RATE_LIMIT_HOURLY_SEARCH_QUERIES:-6}
+      - RATE_LIMIT_HOURLY_INBOX_READS=${RATE_LIMIT_HOURLY_INBOX_READS:-60}
+      - NOVNC_PORT=${NOVNC_PORT:-6080}
+      - NOVNC_PUBLIC_URL=${NOVNC_PUBLIC_URL:-}
+      - PROXY_URL=${PROXY_URL:-}
+      - HTTP_PROXY=${PROXY_URL:-}
+      - HTTPS_PROXY=${PROXY_URL:-}
+      - DATABASE_URL=postgresql://linkedinuser:${DB_PASSWORD}@postgres:5432/linkedin_db
+      - POSTGRES_URL=postgresql://linkedinuser:${DB_PASSWORD}@postgres:5432/linkedin_db
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: always
+    # ANTI-BAN: disable IPv6 inside the worker container so an IPv4-only proxy
+    # cannot be bypassed via the DigitalOcean droplet's IPv6 address. DO enables
+    # IPv6 by default; without this, Chromium dual-stacks and leaks the dc IP.
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "1.5"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+    # Keep ports in override files to avoid duplicate publish rules
+    # when using multiple compose files (base + prod).
+    environment:
+      - API_URL=http://worker:3001
+      - API_SECRET=${API_SECRET}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - API_ROUTE_AUTH_TOKEN=${API_ROUTE_AUTH_TOKEN}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - SESSION_MAX_AGE=${SESSION_MAX_AGE}
+      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
+      - DATABASE_URL=postgresql://linkedinuser:${DB_PASSWORD}@postgres:5432/linkedin_db
+      - POSTGRES_URL=postgresql://linkedinuser:${DB_PASSWORD}@postgres:5432/linkedin_db
+    depends_on:
+      worker:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
