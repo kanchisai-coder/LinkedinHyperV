@@ -8,7 +8,7 @@
 
 ## 1. Configuration Overview
 
-- **Configuration File**: [.coderabbit.yaml](file:///c:/Users/kanchiDhyana%20sai/Downloads/Linkedin-Hyper-V-main/Linkedin-Hyper-V-main/.coderabbit.yaml)
+- **Configuration File**: [.coderabbit.yaml](../../.coderabbit.yaml)
 - **Review Profile**: `assertive` with strict Google Staff Engineer level review prompts.
 - **Path Instructions**:
   - `lib/linkedin/**/*.ts`: Enforce RFC 7636 PKCE `S256` verifier rules, AES-256-GCM token encryption, and HTTP 429 backoff header parsing.

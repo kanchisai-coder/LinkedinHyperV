@@ -7,7 +7,7 @@
 
 ## 1. Workflow Architecture & Configuration
 
-- **Workflow File**: [.github/workflows/ci.yml](file:///c:/Users/kanchiDhyana%20sai/Downloads/Linkedin-Hyper-V-main/Linkedin-Hyper-V-main/.github/workflows/ci.yml)
+- **Workflow File**: [.github/workflows/ci.yml](../../.github/workflows/ci.yml)
 - **Trigger Conditions**: Push to `main`/`master` branches on core frontend, worker, Nomad, and Dockerfile paths.
 - **Pipeline Jobs**:
   1. `build`: Matrix build for `frontend` and `worker` Docker images, exporting image tag format `${ENVIRONMENT}-v${VERSION}-${GITHUB_SHA:0:8}`.

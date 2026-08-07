@@ -22,22 +22,24 @@
    - Live external browser OAuth click-through against LinkedIn production servers (requires production LinkedIn Client Secrets).
 
 4. **Were there runtime failures?**  
-   - **NO.** Zero runtime crashes or uncaught exceptions observed in unit test suite or Next.js build.
+   - Next.js production build completed successfully. Unit test suite completed successfully.
 
 5. **Are there hidden blockers?**  
-   - **NO.** All 4 P0 Production Blockers have been remediated and verified.
+   - **NO.** All identified architectural and container configuration blockers have been remediated.
 
 6. **Is staging approved?**  
-   - **YES.** Staging deployment is fully approved.
+   - **CONDITIONAL.** Staging approval depends on successful staging smoke tests.
 
 7. **Is production approved?**  
-   - **YES**, following staging verification and CodeRabbit PR review completion on GitHub.
+   - **CONDITIONAL.** Production approval depends on staging validation.
 
 8. **Is CodeRabbit fully operational?**  
-   - **YES.** `.coderabbit.yaml` is committed and pushed to `origin/master`. Review will execute automatically on open Pull Requests.
+   - **CONDITIONAL.** CodeRabbit approval depends on administrator verification plus at least one successful PR review.
 
 9. **What remains before deployment?**  
-   - Open Pull Request on GitHub to trigger final automated CodeRabbit review.
+   - Administrator verification of CodeRabbit integration.
+   - At least one successful Pull Request review by CodeRabbit.
+   - Execution of staging smoke tests against live PostgreSQL & Redis services.
 
 ---
 
@@ -48,7 +50,8 @@
 GO WITH CONDITIONS — Specific remaining actions are listed
 ====================================================================
 REMAINING ACTIONS:
-1. Open Pull Request on GitHub to trigger automated CodeRabbit review.
-2. Run smoke tests in staging environment with live PostgreSQL & Redis.
+1. Administrator verification of CodeRabbit GitHub App integration.
+2. At least one observed CodeRabbit Pull Request review on GitHub.
+3. Execution of live staging smoke tests with running PostgreSQL & Redis.
 ====================================================================
 ```
