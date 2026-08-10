@@ -2,7 +2,7 @@ name: Frontend CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - 'app/**'
       - 'components/**'
@@ -14,17 +14,7 @@ on:
       - 'package.json'
       - '.github/workflows/frontend-ci.yml'
   pull_request:
-    branches: [main]
-    paths:
-      - 'app/**'
-      - 'components/**'
-      - 'lib/**'
-      - 'types/**'
-      - 'public/**'
-      - 'next.config.ts'
-      - 'tsconfig.json'
-      - 'package.json'
-      - '.github/workflows/frontend-ci.yml'
+    branches: [main, master]
 
 jobs:
   frontend:
