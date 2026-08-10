@@ -1,7 +1,7 @@
-import { generatePKCE, generateState, base64UrlEncode } from '../pkce';
-import { encryptToken, decryptToken } from '../token-crypto';
-import { LinkedInApiClient, LinkedInApiError } from '../linkedin-client';
-import { oauthService } from '../oauth';
+import { generatePKCE } from './pkce';
+import { encryptToken, decryptToken } from './token-crypto';
+import { LinkedInApiClient, LinkedInApiError } from './linkedin-client';
+import { oauthService } from './oauth';
 
 async function runUnitTests() {
   console.log('--- STARTING LINKEDIN INTEGRATION UNIT TESTS ---');
