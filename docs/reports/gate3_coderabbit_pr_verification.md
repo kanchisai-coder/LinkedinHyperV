@@ -1,70 +1,73 @@
-# Gate 3 — CodeRabbit Pull Request Verification
+# Gate 3 — CodeRabbit Pull Request Verification & Forensic Audit Report
 
-**Reviewing Committee:** Google Production Release Committee (Staff Software Engineer, Staff SRE, Staff Platform Engineer, Staff Security Engineer, Senior DevOps Engineer, Release Engineer, QA Lead, Engineering Manager)  
+**Reviewing Body:** Google Production Release Committee (Staff Software Engineer, Staff SRE, Staff Platform Engineer, Staff Security Engineer, Senior DevOps Engineer, Release Engineer, QA Lead, Engineering Manager)  
 **Target Repository:** `https://github.com/kanchisai-coder/LinkedinHyperV.git`  
-**Pull Request:** PR #1 (`https://github.com/kanchisai-coder/LinkedinHyperV/pull/1`)  
-**Base Branch:** `main` (configured alias for `master`)  
+**Open Pull Request:** PR #1 (`https://github.com/kanchisai-coder/LinkedinHyperV/pull/1`)  
+**Base Branch:** `main` (Remote default branch)  
 **Head Branch:** `release/v1.0.0-rc1`  
-**Verified Head Commit:** `c0f29565bc7cbbc02cf9edc0615bbb37ef2bd4ad`  
-**Verification Timestamp:** August 10, 2026 05:20:00 UTC  
+**Head SHA:** `7f29fee1efa3cfbb2f4004932700ed35f5b75be2`  
+**Base SHA:** `8d5c5898111e0e0605bf19e627737505ffbb1b78`  
+**Audit Timestamp:** August 10, 2026 05:27:00 UTC  
+**Gate 3 Status:** **BLOCKED**  
 
 ---
 
-## 1. Pull Request State
+## 1. Remote Branch & Topology Verification
 
 ```powershell
-# GitHub API Query:
-curl.exe -s "https://api.github.com/repos/kanchisai-coder/LinkedinHyperV/pulls/1"
+# Executed Commands:
+git fetch --all --prune
+git ls-remote --heads origin
+
+# Observed Output:
+8d5c5898111e0e0605bf19e627737505ffbb1b78  refs/heads/main
+7f29fee1efa3cfbb2f4004932700ed35f5b75be2  refs/heads/release/v1.0.0-rc1
 ```
-- **PR Number:** #1
-- **PR Title:** `release: RC-1 Production Candidate Verification`
-- **State:** `open`
-- **Mergeable:** `true` (Mergeable state: `clean`)
-- **Head SHA:** `c0f29565bc7cbbc02cf9edc0615bbb37ef2bd4ad`
-- **Changed Files:** 241
-- **Commits:** 4
+- **Remote `origin/master`**: Stale / Does NOT exist on `origin` (`kanchisai-coder/LinkedinHyperV.git`).
+- **Remote Default Branch**: `main` (Verified via GitHub API `"default_branch": "main"`).
+- **PR #1 Topology**: `release/v1.0.0-rc1` -> `main`.
 
 ---
 
-## 2. CodeRabbit Execution Evidence
+## 2. Forensic Analysis: Why PR #1 Contains 242 Files
 
 ```powershell
-# Query 1: PR Reviews
-curl.exe -s "https://api.github.com/repos/kanchisai-coder/LinkedinHyperV/pulls/1/reviews"
-# Output: []
-
-# Query 2: Issue Comments (Bot Reviews)
-curl.exe -s "https://api.github.com/repos/kanchisai-coder/LinkedinHyperV/issues/1/comments"
-# Output: []
-
-# Query 3: Inline Review Comments
-curl.exe -s "https://api.github.com/repos/kanchisai-coder/LinkedinHyperV/pulls/1/comments"
-# Output: []
-
-# Query 4: Commit Check Runs
-curl.exe -s "https://api.github.com/repos/kanchisai-coder/LinkedinHyperV/commits/c0f29565bc7cbbc02cf9edc0615bbb37ef2bd4ad/check-runs"
-# Output: Check Run "Frontend — Type-check & Lint" completed with SUCCESS. 0 CodeRabbit check-runs observed.
+# Executed Command:
+git diff --stat origin/main...origin/release/v1.0.0-rc1
 ```
 
+### Forensic Breakdown
+1. **Root Directory Restructuring (235 Renames, 0 Code Changes)**:
+   On `origin/main`, all project files were nested under `/Linkedin-Hyper-V-main/`. When promoted to the repository root `/` in commit `437eff7` to unblock GitHub Actions workflow discovery, Git recorded **235 file renames** (`Linkedin-Hyper-V-main/...` -> `...`).
+2. **Actual Code/Config Modifications (4 Files)**:
+   - `.github/workflows/ci.yml` (Added `pull_request` trigger)
+   - `.github/workflows/frontend-ci.yml` (Added `pull_request` trigger)
+   - `lib/linkedin/linkedin.test.ts` (Corrected `./` relative imports and cleaned unused imports)
+   - `lib/linkedin/linkedin.test.js` (Added eslint-disable for require)
+3. **Operational Reports (3 New Files)**:
+   - `docs/reports/company_release_execution_report.md`
+   - `docs/reports/gate2_github_actions_verification.md`
+   - `docs/reports/gate3_coderabbit_pr_verification.md`
+
 ---
 
-## 3. .coderabbit.yaml Verification
+## 3. CodeRabbit Scope & Limit Analysis
 
-- **Location:** `/.coderabbit.yaml` (Repository Root)
-- **YAML Validity:** Valid YAML v2
-- **Configured Base Branches:** `["main", "master"]`
-- **Auto Review:** `enabled: true`, `drafts: false`
-- **Tone Profile:** Assertive Google Staff Engineer level review for OWASP Top 10, PKCE compliance, and memory safety.
-- **Path Instructions:** Tailored rules active for `lib/linkedin/**`, `worker/src/**`, `nomad/**`, and `Dockerfile`.
+- **Local CodeRabbit Review**: Cancelled with message: `"This PR contains 238 files, which is 88 over the limit of 150."`
+- **Root Cause**: The local CodeRabbit extension enforces a strict 150-file limit on free/local reviews. Because the PR contains 235 renamed files from directory restructuring, it exceeds the local review threshold.
+- **GitHub App Review**: Cloud CodeRabbit GitHub App requires repository access authorization on `kanchisai-coder/LinkedinHyperV`.
 
 ---
 
-## 4. Findings & Assessment
+## 4. Gate 3 Evidence Matrix
 
-- **Total Review Comments:** 0
-- **Total Security Findings:** 0
-- **Total Release Blocking Findings:** 0
-- **Diagnosis:** The CodeRabbit configuration is verified and located at repository root. However, because the repository was recently migrated to the company account `kanchisai-coder`, the CodeRabbit GitHub Application either requires repository authorization or an on-demand trigger comment (`@coderabbitai review`) on PR #1.
+| Gate Requirement | Empirical Observation | Status |
+| :--- | :--- | :---: |
+| **PR Exists & Open** | PR #1 is open (`release/v1.0.0-rc1` -> `main`) | **PASS** |
+| **.coderabbit.yaml Valid** | Present at repository root, valid YAML v2 | **PASS** |
+| **GitHub Actions PR Checks** | `Frontend — Type-check & Lint` is `completed: success` | **PASS** |
+| **CodeRabbit Local Review** | Cancelled (238 files > 150 limit due to renames) | **SCOPE LIMITED** |
+| **CodeRabbit Cloud Review** | 0 review comments/checks recorded on GitHub PR #1 | **BLOCKED** |
 
 ---
 
@@ -72,11 +75,9 @@ curl.exe -s "https://api.github.com/repos/kanchisai-coder/LinkedinHyperV/commits
 
 ```
 ====================================================================
-GATE 3: BLOCKED / PENDING APP ACTIVATION
+GATE 3: BLOCKED
 ====================================================================
-EVIDENCE: .coderabbit.yaml is active at root on PR #1.
-GitHub API returns 0 review comments/checks from CodeRabbit.
-ACTION: Authorize CodeRabbit GitHub App on kanchisai-coder/LinkedinHyperV
-or post "@coderabbitai review" comment on PR #1.
+REASON: Local CodeRabbit cancelled review due to 150-file limit on
+restructured files. Cloud CodeRabbit GitHub review not yet executed.
 ====================================================================
 ```
