@@ -41,3 +41,65 @@ jobs:
 
       - name: ESLint
         run: npx eslint . --ext .ts,.tsx --max-warnings 0
+
+  security-guard:
+    name: Security — Crypto Fallback Regression Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect deterministic crypto fallback (CVE-RC1-CRYPTO-001)
+        run: |
+          echo "Scanning for forbidden deterministic encryption fallback patterns..."
+
+          # Sanity check: .next/ and node_modules/ must not exist in a clean CI checkout.
+          # Both are gitignored. If either is present, the grep scan scope would be unreliable.
+          if [ -d ".next" ]; then
+            echo "WARNING: .next/ build artifact directory found in CI checkout — this is unexpected."
+            echo "         It should be gitignored. Ensure no caching step is restoring it."
+            echo "         Failing build to prevent false-negative scan."
+            exit 1
+          fi
+
+          # Pattern 1: The specific passphrase that was the known production fallback.
+          # Explicitly excludes:
+          #   - *.test.js / *.test.ts  (security test oracle files — allowed)
+          #   - *.spec.js / *.spec.ts  (any spec test files — allowed)
+          #   - *.security.test.js     (intentional test oracle — allowed)
+          #   - .next/                 (build artifact dir — not source, gitignored)
+          #   - node_modules/          (third-party deps — gitignored)
+          # This prevents false-positives while still detecting reintroduction in
+          # production source code (e.g. lib/linkedin/token-crypto.ts).
+          FALLBACK_HITS=$(grep -r \
+            --include="*.ts" --include="*.js" \
+            --exclude="*.test.js" --exclude="*.test.ts" \
+            --exclude="*.spec.js" --exclude="*.spec.ts" \
+            --exclude="*.security.test.js" \
+            --exclude-dir=".next" --exclude-dir="node_modules" \
+            "fallback-linkedin-secret-passphrase" . 2>/dev/null || true)
+
+          if [ -n "$FALLBACK_HITS" ]; then
+            echo "FAIL: Deterministic crypto fallback passphrase detected in production source."
+            echo "      Offending files/lines:"
+            echo "$FALLBACK_HITS"
+            echo "      Remove the scryptSync fallback from token-crypto.ts and all production copies."
+            exit 1
+          fi
+
+          # Pattern 2: scryptSync used for key derivation in lib/linkedin/ production context.
+          # Excludes test files and build artifacts for the same reasons as Pattern 1.
+          SCRYPT_HITS=$(grep -r \
+            --include="*.ts" --include="*.js" \
+            --exclude="*.test.js" --exclude="*.test.ts" \
+            --exclude="*.spec.js" --exclude="*.spec.ts" \
+            --exclude="*.security.test.js" \
+            --exclude-dir=".next" --exclude-dir="node_modules" \
+            -l "scryptSync" lib/linkedin/ 2>/dev/null || true)
+
+          if [ -n "$SCRYPT_HITS" ]; then
+            echo "FAIL: scryptSync detected in lib/linkedin/ production source — possible fallback reintroduction."
+            echo "      Offending files: $SCRYPT_HITS"
+            exit 1
+          fi
+
+          echo "PASS: No deterministic crypto fallback patterns detected in production source."
