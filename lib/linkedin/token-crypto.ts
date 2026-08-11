@@ -3,11 +3,28 @@ import crypto from 'crypto';
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // Standard 96-bit IV for AES-GCM
 
+/**
+ * Resolves the AES-256-GCM master key from environment configuration.
+ *
+ * Key precedence:
+ *   1. LINKEDIN_TOKEN_ENCRYPTION_KEY  (preferred — dedicated OAuth token key)
+ *   2. SESSION_ENCRYPTION_KEY         (fallback — shared session key)
+ *
+ * Fail-closed: if neither variable is set, throws a configuration error.
+ * No deterministic or hardcoded fallback exists in any environment.
+ */
 function getMasterKey(): Buffer {
-  const secretKeyHex = process.env.LINKEDIN_TOKEN_ENCRYPTION_KEY || process.env.SESSION_ENCRYPTION_KEY;
+  const secretKeyHex =
+    process.env.LINKEDIN_TOKEN_ENCRYPTION_KEY ||
+    process.env.SESSION_ENCRYPTION_KEY;
+
   if (!secretKeyHex) {
-    // Fallback secret key for dev/test mode if environment variable is omitted
-    return crypto.scryptSync('fallback-linkedin-secret-passphrase', 'salt', 32);
+    // SECURITY: Fail closed. No deterministic fallback is permitted.
+    // Set LINKEDIN_TOKEN_ENCRYPTION_KEY or SESSION_ENCRYPTION_KEY (64 hex chars).
+    throw new Error(
+      'Encryption key configuration is required. ' +
+      'Set LINKEDIN_TOKEN_ENCRYPTION_KEY or SESSION_ENCRYPTION_KEY.'
+    );
   }
 
   if (secretKeyHex.length === 64) {

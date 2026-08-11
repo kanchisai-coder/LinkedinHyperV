@@ -218,6 +218,19 @@ NEXT_PUBLIC_WS_URL={{ .Data.data.NEXT_PUBLIC_WS_URL }}
 EOH
       }
 
+      # Inject the OAuth token encryption key from the shared console secret.
+      # Required by app/api/auth/linkedin/callback/route.ts → encryptToken().
+      # Same Vault source as the worker task (secrets/data/linkedin-console/console).
+      template {
+        destination = "secrets/linkedin-console/frontend-crypto.env"
+        env         = true
+        data        = <<EOH
+{{ with secret "secrets/data/linkedin-console/console" }}
+SESSION_ENCRYPTION_KEY={{ .Data.data.SESSION_ENCRYPTION_KEY }}
+{{ end }}
+EOH
+      }
+
       resources {
         cpu    = 1000
         memory = 1024
