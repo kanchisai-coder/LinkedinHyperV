@@ -16,9 +16,14 @@ job "linkedin-console" {
     role = "linkedin-console"
   }
 
-  # Multi-node deployment topology across datacenter nodes
-  group "console" {
-    count = 2
+  # SECURITY (F2): count = 1 enforces the BullMQ concurrency = 1 invariant
+  # cluster-wide.  Two allocations would each start a Worker per account queue,
+  # meaning two processes compete for the same queue — BullMQ lockDuration
+  # provides intra-queue serialisation but does NOT prevent a second allocation
+  # from stealing a job immediately after the lock expires.  Single allocation
+  # is the only safe posture when LinkedIn requires exactly one active browser
+  # session per account.
+  count = 1
 
     network {
       mode = "bridge"
@@ -43,7 +48,13 @@ job "linkedin-console" {
       port "novnc" {
         static       = 6080
         to           = 6080
-        host_network = "public"
+        # SECURITY (F1): noVNC must NOT be publicly reachable.
+        # websockify provides a live authenticated LinkedIn browser session;
+        # public access would allow unauthenticated account takeover.
+        # Set to private so the port is only reachable within the Nomad/Consul
+        # internal network.  nginx /novnc/ proxy is the ONLY permitted ingress
+        # and must enforce server-side authentication (see deployment/nginx.conf).
+        host_network = "private"
       }
     }
 
@@ -207,6 +218,7 @@ API_SECRET={{ .Data.data.API_SECRET }}
 API_ROUTE_AUTH_TOKEN={{ .Data.data.API_ROUTE_AUTH_TOKEN }}
 PROXY_AUTH_TOKENS='{{ .Data.data.PROXY_AUTH_TOKENS }}'
 PROXY_AUTH_COOKIE_NAME={{ .Data.data.PROXY_AUTH_COOKIE_NAME }}
+TRUSTED_PROXY_IP={{ .Data.data.TRUSTED_PROXY_IP }}
 REDIS_URL={{ .Data.data.REDIS_URL }}
 DATABASE_URL={{ .Data.data.DATABASE_URL }}
 POSTGRES_URL={{ .Data.data.POSTGRES_URL }}
@@ -214,6 +226,19 @@ DASHBOARD_PASSWORD={{ .Data.data.DASHBOARD_PASSWORD }}
 JWT_SECRET={{ .Data.data.JWT_SECRET }}
 SESSION_MAX_AGE={{ .Data.data.SESSION_MAX_AGE }}
 NEXT_PUBLIC_WS_URL={{ .Data.data.NEXT_PUBLIC_WS_URL }}
+{{ end }}
+EOH
+      }
+
+      # Inject the OAuth token encryption key from the shared console secret.
+      # Required by app/api/auth/linkedin/callback/route.ts → encryptToken().
+      # Same Vault source as the worker task (secrets/data/linkedin-console/console).
+      template {
+        destination = "secrets/linkedin-console/frontend-crypto.env"
+        env         = true
+        data        = <<EOH
+{{ with secret "secrets/data/linkedin-console/console" }}
+SESSION_ENCRYPTION_KEY={{ .Data.data.SESSION_ENCRYPTION_KEY }}
 {{ end }}
 EOH
       }

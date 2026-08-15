@@ -59,7 +59,7 @@ job "linkedin-console" {
       port "novnc" {
         static       = 6080
         to           = 6080
-        host_network = "public"
+        host_network = "private"
       }
     }
 
@@ -242,6 +242,8 @@ job "linkedin-console" {
         PROXY_AUTH_TOKENS=["{{ .proxy_auth_token }}"]
         JWT_SECRET={{ .jwt_secret }}
         DASHBOARD_PASSWORD={{ .dashboard_password }}
+        SESSION_ENCRYPTION_KEY={{ .session_encryption_key }}
+        TRUSTED_PROXY_IP={{ or .trusted_proxy_ip "127.0.0.1" }}
         REDIS_URL=redis://:{{ .redis_password }}@proxy.redis-production.service.consul:6379/1
         DATABASE_URL=postgresql://linkedinuser:{{ .db_password }}@master.db-acumen.service.consul:5432/linkedin_db
         POSTGRES_URL=postgresql://linkedinuser:{{ .db_password }}@master.db-acumen.service.consul:5432/linkedin_db

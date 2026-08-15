@@ -12,13 +12,16 @@ on:
       - 'next.config.ts'
       - 'tsconfig.json'
       - 'package.json'
+      - 'nomad/**'
+      - 'deployment/**'
+      - 'worker/**'
       - '.github/workflows/frontend-ci.yml'
   pull_request:
     branches: [main, master]
 
 jobs:
   frontend:
-    name: Frontend — Type-check & Lint
+    name: Frontend — Type-check, Lint & Security Tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -41,3 +44,145 @@ jobs:
 
       - name: ESLint
         run: npx eslint . --ext .ts,.tsx --max-warnings 0
+
+      - name: Crypto security regression tests
+        run: node lib/linkedin/token-crypto.security.test.js
+
+      - name: Auth & proxy security regression tests
+        run: node lib/auth/auth-security.test.js
+
+  security-guard:
+    name: Security — Production Hardening & Architectural Invariant Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect deterministic crypto fallback (CVE-RC1-CRYPTO-001)
+        run: |
+          echo "Scanning for forbidden deterministic encryption fallback patterns..."
+
+          if [ -d ".next" ]; then
+            echo "WARNING: .next/ build artifact directory found in CI checkout — unexpected."
+            exit 1
+          fi
+
+          FALLBACK_HITS=$(grep -r \
+            --include="*.ts" --include="*.js" \
+            --exclude="*.test.js" --exclude="*.test.ts" \
+            --exclude="*.spec.js" --exclude="*.spec.ts" \
+            --exclude="*.security.test.js" \
+            --exclude-dir=".next" --exclude-dir="node_modules" \
+            "fallback-linkedin-secret-passphrase" . 2>/dev/null || true)
+
+          if [ -n "$FALLBACK_HITS" ]; then
+            echo "FAIL: Deterministic crypto fallback passphrase detected in production source."
+            echo "$FALLBACK_HITS"
+            exit 1
+          fi
+
+          SCRYPT_HITS=$(grep -r \
+            --include="*.ts" --include="*.js" \
+            --exclude="*.test.js" --exclude="*.test.ts" \
+            --exclude="*.spec.js" --exclude="*.spec.ts" \
+            --exclude="*.security.test.js" \
+            --exclude-dir=".next" --exclude-dir="node_modules" \
+            -l "scryptSync" lib/linkedin/ 2>/dev/null || true)
+
+          if [ -n "$SCRYPT_HITS" ]; then
+            echo "FAIL: scryptSync detected in lib/linkedin/ production source — possible fallback reintroduction."
+            echo "$SCRYPT_HITS"
+            exit 1
+          fi
+
+          echo "PASS: No deterministic crypto fallback patterns detected in production source."
+
+      - name: Detect plaintext credentials in deployment manifests (F0 Secret Scanning)
+        run: |
+          echo "Scanning deployment manifests for hardcoded secrets/credentials..."
+
+          # Check all HCL deployment files for inline hex secret assignments (32 to 64 hex chars)
+          SECRET_HITS=$(grep -rnE '(SESSION_ENCRYPTION_KEY|REDIS_PASSWORD|API_SECRET|JWT_SECRET|DASHBOARD_PASSWORD)[[:space:]]*=[[:space:]]*"[0-9a-zA-Z@!#%^&*_-]{16,}"' nomad/ deployment/ 2>/dev/null || true)
+
+          if [ -n "$SECRET_HITS" ]; then
+            echo "FAIL: Plaintext credential assignment detected in deployment manifest:"
+            echo "$SECRET_HITS"
+            echo "Secrets must be externalized to Nomad variables or Vault templates."
+            exit 1
+          fi
+
+          echo "PASS: No plaintext credentials found in deployment manifests."
+
+      - name: Detect noVNC public networking and unauthorized 6080 exposure (F1)
+        run: |
+          echo "Checking noVNC port network isolation..."
+
+          # novnc port must strictly use host_network = "private"
+          PUBLIC_NOVNC=$(grep -rn -A 5 'port "novnc"' nomad/ deployment/ | grep 'host_network[[:space:]]*=[[:space:]]*"public"' || true)
+
+          if [ -n "$PUBLIC_NOVNC" ]; then
+            echo "FAIL: noVNC port configured with host_network = public:"
+            echo "$PUBLIC_NOVNC"
+            echo "noVNC must use host_network = private to prevent unauthenticated access."
+            exit 1
+          fi
+
+          echo "PASS: noVNC port is correctly isolated on private host network."
+
+      - name: Detect insecure VNC / websockify loopback bindings (F1/F2)
+        run: |
+          echo "Checking worker entrypoint loopback bindings..."
+
+          if grep -E -- '-listen[[:space:]]+0\.0\.0\.0' worker/entrypoint.sh; then
+            echo "FAIL: x11vnc is listening on 0.0.0.0. It must bind strictly to 127.0.0.1."
+            exit 1
+          fi
+
+          if ! grep -E -- '-listen[[:space:]]+127\.0\.0\.1' worker/entrypoint.sh; then
+            echo "FAIL: x11vnc is missing -listen 127.0.0.1 binding in worker/entrypoint.sh."
+            exit 1
+          fi
+
+          if ! grep -E 'websockify.*127\.0\.0\.1' worker/entrypoint.sh; then
+            echo "FAIL: websockify must explicitly bind to 127.0.0.1 in worker/entrypoint.sh."
+            exit 1
+          fi
+
+          echo "PASS: x11vnc and websockify loopback bindings verified."
+
+      - name: Detect BullMQ worker replica count concurrency violations (F2)
+        run: |
+          echo "Checking Nomad worker count..."
+
+          # In Nomad manifests for linkedin-console, group "console" count must be 1
+          INVALID_COUNTS=$(grep -rnE '^[[:space:]]*count[[:space:]]*=[[:space:]]*[2-9][0-9]*' nomad/ deployment/ || true)
+
+          if [ -n "$INVALID_COUNTS" ]; then
+            echo "FAIL: Nomad manifest has count > 1 for worker task group:"
+            echo "$INVALID_COUNTS"
+            echo "LinkedIn account ban prevention requires strict concurrency = 1 (count = 1)."
+            exit 1
+          fi
+
+          echo "PASS: Worker group count invariant (count = 1) verified across all manifests."
+
+      - name: Detect CSP regressions (F5)
+        run: |
+          echo "Checking Content-Security-Policy header rules..."
+
+          if ! grep -q "Content-Security-Policy" next.config.ts; then
+            echo "FAIL: Content-Security-Policy header missing from next.config.ts."
+            exit 1
+          fi
+
+          if grep -q "connect-src.*ws:" next.config.ts; then
+            echo "FAIL: Unencrypted / wildcard ws: protocol detected in connect-src."
+            echo "Use 'connect-src 'self' wss:' to restrict websocket destinations."
+            exit 1
+          fi
+
+          if ! grep -q "frame-ancestors" next.config.ts; then
+            echo "FAIL: frame-ancestors directive missing from CSP in next.config.ts."
+            exit 1
+          fi
+
+          echo "PASS: Content-Security-Policy restrictions verified."
