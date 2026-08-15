@@ -8,6 +8,7 @@ locals {
   worker_image   = "${local.registry}/${local.project}/worker:${local.image_tag}"
 
   novnc_public_url = "https://linkedin-novnc.acm.acumen-strategy.com"
+  var_path         = "nomad/jobs/linkedin-console"
 }
 
 job "linkedin-console" {
@@ -20,6 +21,8 @@ job "linkedin-console" {
   }
 
   group "console" {
+    # SECURITY (F2): count = 1 enforces the BullMQ concurrency = 1 invariant
+    # cluster-wide to prevent account bans caused by competing browser sessions.
     count = 1
 
     network {
@@ -45,7 +48,9 @@ job "linkedin-console" {
       port "novnc" {
         static       = 6080
         to           = 6080
-        host_network = "public"
+        # SECURITY (F1): noVNC must NOT be publicly reachable.
+        # Set to private so access is only possible via nginx auth_basic proxy.
+        host_network = "private"
       }
     }
 
@@ -70,16 +75,13 @@ job "linkedin-console" {
 
       config {
         image = local.worker_image
-        # image_tag is MUTABLE (we overwrite the same tag on each push). Without
-        # force_pull, a node that already cached this tag at an older digest will
-        # NOT re-pull on `nomad job run` → you silently keep running stale code.
         force_pull = true
         ports = ["worker_http", "novnc"]
 
         auth {
           server_address = "h4rb0r.acm.acumen-strategy.com"
           username       = "admin"
-          password       = "AcumenRegP455"
+          password       = "REPLACE_VIA_AGENT_CONFIG"
         }
       }
 
@@ -88,14 +90,6 @@ job "linkedin-console" {
 
         REDIS_HOST     = "proxy.redis-production.service.consul"
         REDIS_PORT     = "6379"
-        REDIS_PASSWORD = "8560869df25afcd2bd7f7eca73babe19f8b027be"
-        REDIS_URL      = "redis://:8560869df25afcd2bd7f7eca73babe19f8b027be@proxy.redis-production.service.consul:6379/1"
-
-        DATABASE_URL = "postgresql://linkedinuser:LinkedInOutreach2026@master.db-acumen.service.consul:5432/linkedin_db"
-        POSTGRES_URL = "postgresql://linkedinuser:LinkedInOutreach2026@master.db-acumen.service.consul:5432/linkedin_db"
-
-        SESSION_ENCRYPTION_KEY = "78bd8cc8c39fb6ec4830ab006e78acb8851f520521b685edaaa4314eff2e8c73"
-        API_SECRET             = "02eaea7b5ed9c841161615c2f339864acf874c437aa4abc417b2f02273efe2e5"
 
         SESSION_TTL_DAYS = "30"
 
@@ -146,12 +140,8 @@ job "linkedin-console" {
         RATE_LIMIT_HOURLY_INBOX_READS      = "60"
 
         # ── Voyager / realtime / webhooks (master plan) — OFF by default ──
-        # Flip to "1" for testing AFTER validating shapes with:
-        #   nomad alloc exec -task worker <alloc> node src/voyager/probe.js personl 30
-        USE_VOYAGER_READS = "0"   # route inbox/thread reads via Voyager API (scraper fallback stays)
-        USE_REALTIME      = "0"   # open the realtime event stream per account
-        # JSON array of webhook subscribers, e.g.
-        # [{"url":"https://your/hook","secret":"whsec_x","events":["message.*"],"accounts":["*"]}]
+        USE_VOYAGER_READS = "0"
+        USE_REALTIME      = "0"
         WEBHOOK_ENDPOINTS = ""
         EVENT_STREAM_MAXLEN  = "100000"
         WEBHOOK_MAX_ATTEMPTS = "8"
@@ -160,17 +150,28 @@ job "linkedin-console" {
         NOVNC_PUBLIC_URL = local.novnc_public_url
 
         # ── Proxy ───────────────────────────────────────────────────────
-        # Empty = direct egress from the datacenter IP (167.71.211.25) — the
-        # root LinkedIn ban cause. Drop a residential/mobile proxy URL here, or
-        # per-account via PROXY_FOR_<ACCOUNTID> (e.g. PROXY_FOR_PERSONL).
         PROXY_URL   = ""
         HTTP_PROXY  = ""
         HTTPS_PROXY = ""
-        # PROXY_FOR_PERSONL  = "socks5://user:pass@host:1080"
-        # PROXY_FOR_TEST     = "socks5://user:pass@host:1080"
-        # ANTIBAN_TZ_PERSONL = "America/New_York"
 
         ACCOUNT_IDS = ""
+      }
+
+      # SECURITY (F0): Secrets rendered from Nomad variable into a file.
+      template {
+        destination = "secrets/worker.env"
+        env         = true
+        change_mode = "restart"
+        data        = <<-EOT
+        {{- with nomadVar "${local.var_path}" }}
+        REDIS_PASSWORD={{ .redis_password }}
+        REDIS_URL=redis://:{{ .redis_password }}@proxy.redis-production.service.consul:6379/1
+        DATABASE_URL=postgresql://linkedinuser:{{ .db_password }}@master.db-acumen.service.consul:5432/linkedin_db
+        POSTGRES_URL=postgresql://linkedinuser:{{ .db_password }}@master.db-acumen.service.consul:5432/linkedin_db
+        SESSION_ENCRYPTION_KEY={{ .session_encryption_key }}
+        API_SECRET={{ .api_secret }}
+        {{- end }}
+        EOT
       }
 
       resources {
@@ -217,7 +218,7 @@ job "linkedin-console" {
         auth {
           server_address = "h4rb0r.acm.acumen-strategy.com"
           username       = "admin"
-          password       = "AcumenRegP455"
+          password       = "REPLACE_VIA_AGENT_CONFIG"
         }
       }
 
@@ -226,22 +227,30 @@ job "linkedin-console" {
 
         API_URL             = "http://127.0.0.1:3001"
         NEXT_PUBLIC_API_URL = "https://linkedin-console.acm.acumen-strategy.com/api"
-
-        API_SECRET             = "02eaea7b5ed9c841161615c2f339864acf874c437aa4abc417b2f02273efe2e5"
-        API_ROUTE_AUTH_TOKEN   = "9e49ba23a05c1130dc22517500220ba61751fe5616a104e54052dc42accb6a0a"
-        PROXY_AUTH_TOKENS      = "[\"edcd90a75320bcae64b73d7a7b982281c400787199984f07a90dffd430c016cb\"]"
         PROXY_AUTH_COOKIE_NAME = "app_proxy_auth"
+        SESSION_MAX_AGE        = "2592000"
+        NEXT_PUBLIC_WS_URL     = "https://linkedin-console.acm.acumen-strategy.com"
+      }
 
-        REDIS_URL = "redis://:8560869df25afcd2bd7f7eca73babe19f8b027be@proxy.redis-production.service.consul:6379/1"
-
-        DATABASE_URL = "postgresql://linkedinuser:LinkedInOutreach2026@master.db-acumen.service.consul:5432/linkedin_db"
-        POSTGRES_URL = "postgresql://linkedinuser:LinkedInOutreach2026@master.db-acumen.service.consul:5432/linkedin_db"
-
-        DASHBOARD_PASSWORD = "LinkedIn@Acumen2026!"
-        JWT_SECRET         = "8c7f5972b742d7224e5deb63df3eff06bf7d33fc5ac8613c95f022704c0132d7"
-        SESSION_MAX_AGE    = "2592000"
-
-        NEXT_PUBLIC_WS_URL = "https://linkedin-console.acm.acumen-strategy.com"
+      # SECURITY (F0, F4): Secrets rendered from Nomad variable into a file.
+      template {
+        destination = "secrets/frontend.env"
+        env         = true
+        change_mode = "restart"
+        data        = <<-EOT
+        {{- with nomadVar "${local.var_path}" }}
+        API_SECRET={{ .api_secret }}
+        API_ROUTE_AUTH_TOKEN={{ .api_route_auth_token }}
+        PROXY_AUTH_TOKENS=["{{ .proxy_auth_token }}"]
+        JWT_SECRET={{ .jwt_secret }}
+        DASHBOARD_PASSWORD={{ .dashboard_password }}
+        SESSION_ENCRYPTION_KEY={{ .session_encryption_key }}
+        TRUSTED_PROXY_IP={{ or .trusted_proxy_ip "127.0.0.1" }}
+        REDIS_URL=redis://:{{ .redis_password }}@proxy.redis-production.service.consul:6379/1
+        DATABASE_URL=postgresql://linkedinuser:{{ .db_password }}@master.db-acumen.service.consul:5432/linkedin_db
+        POSTGRES_URL=postgresql://linkedinuser:{{ .db_password }}@master.db-acumen.service.consul:5432/linkedin_db
+        {{- end }}
+        EOT
       }
 
       resources {

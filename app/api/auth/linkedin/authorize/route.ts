@@ -1,16 +1,20 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { oauthService } from '@/lib/linkedin/oauth';
+import { shouldUseSecureCookie } from '@/lib/auth/cookie';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const { url, state, codeVerifier } = oauthService.generateAuthorizationUrl();
 
     const response = NextResponse.redirect(url);
 
-    // Set secure HTTP-only cookies for CSRF state and PKCE verifier validation
+    // SECURITY (F4): Use shouldUseSecureCookie() so that the Secure flag is set
+    // correctly behind a reverse proxy that terminates TLS (nginx sets
+    // X-Forwarded-Proto: https).  Raw NODE_ENV check misses this case in
+    // production-behind-proxy and in HTTPS staging environments.
     response.cookies.set('linkedin_oauth_state', state, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: shouldUseSecureCookie(req),
       sameSite: 'lax',
       maxAge: 600, // 10 minutes
       path: '/',
@@ -18,7 +22,7 @@ export async function GET() {
 
     response.cookies.set('linkedin_pkce_verifier', codeVerifier, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: shouldUseSecureCookie(req),
       sameSite: 'lax',
       maxAge: 600, // 10 minutes
       path: '/',

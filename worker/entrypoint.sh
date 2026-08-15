@@ -68,11 +68,14 @@ rm -f /tmp/novnc-password \
 # default ~10ms (~100fps). -ncache 0 disables client-side caching that wastes
 # server memory. -noxdamage avoids the XDAMAGE extension which spins under
 # Chromium animations on Xvfb. Together these drop idle CPU from ~30% → <5%.
+# SECURITY (F1, F2): bind x11vnc and websockify to loopback only (127.0.0.1).
+# Direct external access is not permitted; ingress is strictly via nginx
+# reverse proxy with auth_basic authentication over private network.
 x11vnc -display :99 -forever -shared -nopw \
   -wait 50 -defer 30 -ncache 0 -noxdamage \
-  -listen 0.0.0.0 -rfbport 5900 >/tmp/x11vnc.log 2>&1 &
+  -listen 127.0.0.1 -rfbport 5900 >/tmp/x11vnc.log 2>&1 &
 X11VNC_PID=$!
-websockify --web /usr/share/novnc/ "${NOVNC_PORT}" localhost:5900 >/tmp/novnc.log 2>&1 &
+websockify --web /usr/share/novnc/ 127.0.0.1:"${NOVNC_PORT}" 127.0.0.1:5900 >/tmp/novnc.log 2>&1 &
 NOVNC_PID=$!
 echo "[entrypoint] Applying Prisma migrations..."
 if ! npx prisma migrate deploy --schema=prisma/schema.prisma; then

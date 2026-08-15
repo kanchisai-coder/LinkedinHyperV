@@ -11,16 +11,54 @@ let derivedPasswordHash: string | null = null;
 const LOGIN_WINDOW_SECONDS = parseInt(process.env.LOGIN_RATE_WINDOW_SECONDS || '900', 10); // 15 min
 const LOGIN_MAX_ATTEMPTS = parseInt(process.env.LOGIN_RATE_MAX_ATTEMPTS || '10', 10);
 
+// SECURITY (F6): Trusted-proxy-aware IP extraction.
+// X-Forwarded-For is trusted ONLY when the immediate peer IP (via X-Real-IP) matches
+// an explicitly configured trusted proxy. If TRUSTED_PROXY_IP is unset or empty,
+// or if the request arrives from an untrusted peer, X-Forwarded-For is IGNORED
+// and the direct connection address (X-Real-IP) is used to prevent header spoofing.
+export function extractClientIp(req: NextRequest, trustedProxyOverride?: string): string {
+  const realIp = req.headers.get('x-real-ip')?.trim() || '';
+  const configured = (trustedProxyOverride !== undefined ? trustedProxyOverride : (process.env.TRUSTED_PROXY_IP || '')).trim();
+
+  if (configured && realIp) {
+    const trustedList = configured.split(',').map((s) => s.trim()).filter(Boolean);
+    if (trustedList.includes(realIp)) {
+      const fwd = req.headers.get('x-forwarded-for');
+      if (fwd) {
+        const firstIp = fwd.split(',')[0].trim();
+        if (firstIp) return firstIp;
+      }
+    }
+  }
+
+  // Strict fail-secure: if not arriving from a verified trusted proxy,
+  // ignore X-Forwarded-For entirely and use the direct socket IP.
+  return realIp || 'unknown';
+}
+
 function clientIp(req: NextRequest): string {
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0].trim();
-  return req.headers.get('x-real-ip') || 'unknown';
+  return extractClientIp(req);
+}
+
+// OBSERVABILITY (F7+F8): emit a structured warning once per process when Redis
+// is unavailable so that log aggregation can alert operators to degraded
+// brute-force protection.  We do NOT expose keys or secret values.
+let _rateLimitRedisWarnEmitted = false;
+function warnRateLimitDegraded(): void {
+  if (_rateLimitRedisWarnEmitted) return;
+  _rateLimitRedisWarnEmitted = true;
+  console.warn(
+    '[auth/login] SECURITY DEGRADED: Redis unavailable — login rate-limiting '
+    + 'has fallen back to fail-open (no distributed counter). '
+    + 'Brute-force protection is local to this process only. '
+    + 'Restore Redis connectivity to re-enable global rate limiting.',
+  );
 }
 
 /** Returns the current failed-attempt count for an IP without incrementing. */
 async function getFailedAttempts(ip: string): Promise<number> {
   const redis = getRedis();
-  if (!redis) return 0;
+  if (!redis) { warnRateLimitDegraded(); return 0; }
   const v = await redis.get(`login:fails:${ip}`).catch(() => null);
   return v ? parseInt(v, 10) || 0 : 0;
 }
@@ -28,12 +66,13 @@ async function getFailedAttempts(ip: string): Promise<number> {
 /** Atomically record a failed attempt and set the window TTL on first failure. */
 async function recordFailedAttempt(ip: string): Promise<void> {
   const redis = getRedis();
-  if (!redis) return;
+  if (!redis) { warnRateLimitDegraded(); return; }
   const key = `login:fails:${ip}`;
   try {
     const count = await redis.incr(key);
     if (count === 1) await redis.expire(key, LOGIN_WINDOW_SECONDS);
   } catch {
+    warnRateLimitDegraded();
     /* fail-open on Redis error — availability over strictness for login */
   }
 }
