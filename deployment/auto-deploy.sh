@@ -15,6 +15,17 @@ Usage:
 
 Examples:
   bash deployment/auto-deploy.sh --domain myapp.example.com --accounts alice,bob
+
+Environment Variables (when OpenSSL is unavailable):
+  API_SECRET              — 64-character hex string for API secret (required)
+  REDIS_PASSWORD          — 32-character hex string for Redis (required)
+  DB_PASSWORD             — 32-character hex string for PostgreSQL (required)
+  SESSION_ENCRYPTION_KEY  — 64-character hex string for sessions (required)
+  JWT_SECRET              — 64-character base64 string for JWT tokens (required)
+  DASHBOARD_PASSWORD      — Secure password for dashboard access (required)
+
+Note: These variables are only required if openssl is not installed. For production,
+use a secure secret store (Vault, AWS Secrets Manager) instead.
 EOF
 }
 
@@ -103,19 +114,63 @@ if command -v openssl >/dev/null 2>&1; then
   RAND_SESSION_KEY="$(openssl rand -hex 32)"
   RAND_JWT_SECRET="$(openssl rand -base64 48 | tr -d '\n')"
 else
-  RAND_API_SECRET="q1W2e3R4t5Y6u7I8o9P0a1S2d3F4g5H6j7K8l9Z0x1C2v3B4"
-  RAND_REDIS_PASSWORD="dev-redis-pass-123"
-  RAND_DB_PASSWORD="dev-db-pass-123"
-  RAND_SESSION_KEY="a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
-  RAND_JWT_SECRET="mK9pL2qR8vX4nZ6wA1bC3dE5fG7hJ0kM9pL2qR8vX4nZ6wA1bC3dE5fG7hJ0kM"
+  echo "WARNING: openssl is not installed. Using environment variables for secret generation."
+  echo "Setting secrets from environment variables..."
+  
+  RAND_API_SECRET="${API_SECRET:-}"
+  RAND_REDIS_PASSWORD="${REDIS_PASSWORD:-}"
+  RAND_DB_PASSWORD="${DB_PASSWORD:-}"
+  RAND_SESSION_KEY="${SESSION_ENCRYPTION_KEY:-}"
+  RAND_JWT_SECRET="${JWT_SECRET:-}"
+  
+  if [[ -z "$RAND_API_SECRET" ]]; then
+    echo "ERROR: API_SECRET environment variable not set and openssl unavailable."
+    echo "Please provide: export API_SECRET=<64-char-hex>"
+    exit 1
+  fi
+  
+  if [[ -z "$RAND_REDIS_PASSWORD" ]]; then
+    echo "ERROR: REDIS_PASSWORD environment variable not set and openssl unavailable."
+    echo "Please provide: export REDIS_PASSWORD=<32-char-hex>"
+    exit 1
+  fi
+  
+  if [[ -z "$RAND_DB_PASSWORD" ]]; then
+    echo "ERROR: DB_PASSWORD environment variable not set and openssl unavailable."
+    echo "Please provide: export DB_PASSWORD=<32-char-hex>"
+    exit 1
+  fi
+  
+  if [[ -z "$RAND_SESSION_KEY" ]]; then
+    echo "ERROR: SESSION_ENCRYPTION_KEY environment variable not set and openssl unavailable."
+    echo "Please provide: export SESSION_ENCRYPTION_KEY=<64-char-hex>"
+    exit 1
+  fi
+  
+  if [[ -z "$RAND_JWT_SECRET" ]]; then
+    echo "ERROR: JWT_SECRET environment variable not set and openssl unavailable."
+    echo "Please provide: export JWT_SECRET=<64-char-base64>"
+    exit 1
+  fi
 fi
 
 set_if_missing API_SECRET "$RAND_API_SECRET"
 set_if_missing REDIS_PASSWORD "$RAND_REDIS_PASSWORD"
 set_if_missing DB_PASSWORD "$RAND_DB_PASSWORD"
 set_if_missing SESSION_ENCRYPTION_KEY "$RAND_SESSION_KEY"
-set_if_missing DASHBOARD_PASSWORD "ChangeMeNow123!"
 set_if_missing JWT_SECRET "$RAND_JWT_SECRET"
+
+# Dashboard password must be set explicitly or provided via environment variable
+if [[ -z "$(grep -E "^[[:space:]]*DASHBOARD_PASSWORD[[:space:]]*=" "$ENV_FILE" | tail -n 1 || true)" ]]; then
+  DASHBOARD_PASSWORD_VALUE="${DASHBOARD_PASSWORD:-}"
+  if [[ -z "$DASHBOARD_PASSWORD_VALUE" ]]; then
+    echo "ERROR: DASHBOARD_PASSWORD environment variable not set and not found in .env"
+    echo "Please provide: export DASHBOARD_PASSWORD=<secure-password>"
+    exit 1
+  fi
+  set_env DASHBOARD_PASSWORD "$DASHBOARD_PASSWORD_VALUE"
+fi
+
 set_if_missing SESSION_MAX_AGE "86400"
 set_env ACCOUNT_IDS "$ACCOUNTS"
 
@@ -180,4 +235,4 @@ curl -fsS -I http://127.0.0.1:3000 | head -n 1
 
 echo
 echo "Done. Open: https://${DOMAIN}"
-echo "IMPORTANT: change DASHBOARD_PASSWORD in ${ENV_FILE} and restart frontend."
+echo "IMPORTANT: Verify DASHBOARD_PASSWORD in ${ENV_FILE} is secure and restart frontend if changed."
